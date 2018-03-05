@@ -1,13 +1,18 @@
 package main
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bcicen/grmon"
+	"plist.jd.com/lc/lclogger"
 )
 
 type sortFn func(*grmon.Routine, *grmon.Routine) bool
@@ -41,11 +46,70 @@ func poll() (routines Routines, err error) {
 	}
 	defer r.Body.Close()
 
-	err = json.NewDecoder(r.Body).Decode(&routines)
+	// err = json.NewDecoder(r.Body).Decode(&routines)
+	// lclogger.Warn(err, "AAAAAAA")
+	// if err != nil {
+	// 	return
+	// }
+	var p *grmon.Routine
+	var buf bytes.Buffer
+
+	body, err := ioutil.ReadAll(r.Body)
+	lclogger.Warn(err, "AAAAAAA")
 	if err != nil {
 		return
+	}
+	_, err = buf.Write(body)
+	lclogger.Warn(err, "AAAAAAA")
+	if err != nil {
+		return
+	}
+	for {
+		line, err := buf.ReadString(newline)
+		if err != nil {
+			break
+		}
+
+		mg := statusRe.FindStringSubmatch(line)
+		if len(mg) > 2 {
+			// new routine block
+			p = &grmon.Routine{}
+
+			i, err := strconv.Atoi(mg[1])
+			if err != nil {
+				panic(err)
+			}
+			p.Num = i
+
+			p.State = mg[2]
+			routines = append(routines, p)
+			continue
+		}
+
+		mg = createdRe.FindStringSubmatch(line)
+		if len(mg) > 1 {
+			p.CreatedBy = mg[1]
+		}
+
+		line = strings.Trim(line, "\n")
+		if line != "" {
+			p.Trace = append(p.Trace, line)
+		}
 	}
 
 	sort.Sort(routines)
 	return
+}
+
+var (
+	newline   = byte(10)
+	statusRe  = regexp.MustCompile("^goroutine\\s(\\d+)\\s\\[(.*)\\]:")
+	createdRe = regexp.MustCompile("^created by (.*)")
+)
+
+type Routine struct {
+	Num       int      `json:"no"`
+	State     string   `json:"state"`
+	CreatedBy string   `json:"created_by"`
+	Trace     []string `json:"trace"`
 }
